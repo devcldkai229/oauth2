@@ -1,0 +1,144 @@
+Spring Security Filters: Chặn và kiểm tra authentication.
+Authentication: Trích xuất thông tin đăng nhập từ request.
+AuthenticationManager: Quản lý quy trình xác thực.
+AuthenticationProvider: Xác thực user chi tiết.
+UserDetailsService: Lấy thông tin user từ DB.
+PasswordEncoder: Mã hóa mật khẩu.
+SecurityContext: Lưu trạng thái đăng nhập của user
+
+SecurityFilterChain họat động với tham số là HttpSecurity http
+==> Cấu hình nó bằng cách http.authorizeHttpRequests(chấp nhận kểu trả về là AuthorizeHttpRequestsConfigurer)
+==> Với một số phương thức sử dụng lambda expression như requestMatchers, permillAll, anyRequest,
+                                                                          authenticated, formLogin(WithDefaults),
+                                                                          hasRole
+
+Tạo ra user trong ram thông qua InMemoryUserDetailsManager
+    UserDetailsService (loadUserByUserName) -> UserDetailsManager (CRUD) -> InMemoryUserDetailsManager (RAM)
+    UserDetailsService (loadUserByUserName) -> UserDetailsManager (CRUD) -> JdbcUserDetailsManager (DB)
+
+    ==> Tạo bean UserDetailsService với RAM sẽ tạo ra 2 tài khoản
+
+
+Trong việc tạo UserDetailsService với method mặc định là roles("ADMIN") spring security sẽ tự thêm ROLE_ vào phía trước để hiểu
+ngoài ra nếu sử dụng method authorities("ROLE_ADMIN") phải thêm thủ cong ROLE_ vào phía trước
+
+Ở phần cấu hình filterChains hasRole("ADMIN") spring security sẽ tự thêm ROLE_ vào phía trước để hiểu ta không cần thêm vào phía trước của nó
+Nếu muốn tự thêm thì sử dụng method authorities("ROLE_ADMIN")
+
+==> Mặc định hasRole chỉ hiểu 2 dữ liệu là ROLE_ADMIN và ROLE_USER các quyền khác như READ, WRITE thì sẽ phải sử dụng
+method hasAnyAuthority("WRITE", "READ", "DELETE") hoặc hasAuthority(kiểm tra 1 quyền cụ thể) và ở user phải là authorities(tự cài đặt theo ý muốn)
+
+==> Nếu đã hasRole() thì tiếp tục sẽ không thể sử dụng hasAnyAuthority nên nếu có nhều quyền thì phải set authorities và hasAnyAuthority
+
+==> Note:
+    Trong việc cấu hình filterChains thì requestMatchers("/api/*") sẽ ghi đè toàn bo cach cài đặt lúc trước và nếu set quyền thì chỉ có quyền đó mới duoc truy cập vào
+    Nếu sử dụng hasAnyAuthority("READ", "WRITE") với việc này thì chúng ta không thể hiểu là đ truy cập một link cụ thể cần có 2 quyen READ WRITE
+    Nó tự hiểu là có một trong các quyền đó là đựoc
+
+    Sử dụng access(allOf(hasAuthority("READ") or hasAnyAuthority("WRITE"))) cho phép truy cập cả 2
+
+    Ở phía cài đặt tài khoản nếu chúng ta sử dụng roles("USER").authorities("READ", "WRITE") thì sẽ bị authorities ghi đè và mất quyền USER
+    => Sử dụng chỉ một authorities("READ", "WRITE", "ROLE_USER") là đầy đủ các quyền
+
+==> ĐỐI VỚI SỬ DỤNG JWT xây dựng cơ chế xác thực thì mặc định sẽ phá bỏ cơ chế xây dung mặc dinh của spring security
+==> Mặc định spring security có các cơ chế xác tự ặc định thng qua formLogin, basicAuth sẽ hiện UI đăng nhập va có thể
+xác thực bằng BasicAuth trong postman thực tế thì không cần vậy nếu ta xây dựng tự tay thì nó bác bỏ mặcdidinh đi và ta
+sẽ xem như khi nào người dùng nhấn vào nút login thì nó sẽ là request đến application của chúng ta:
+    *JWT TOKEN: cho phép xác thực người dùng không trạng thái không cần session - sử dụng Secret Key để ky các token xác thực
+    + Đối với cái này thì một token có 3 phần:
+        - Header: cái dùng để setup thuật toán ký số khi gợp thành một JWT hoặc JWSObject
+        - Payload xây dựng từ ClaimSet với các yếu toosL Subject, tokenId, IssuedAt, ExpiredAt, Issuer, Audience, Signature
+        - Signature: tạo thành có thể từ SignedJWT hoặc JWSObject ==> new SignedJWT(header, payload) hoặc new JWSObject(header, payload)
+
+    + Trong JWT token thì chia làm 3 loại token như:
+    - Access Token - dùng để truy cap tài nguyên xác thực người dùng
+    - Refresh Token -  dùng để tạo lại access Token để người cùng tiếp tục truy cập
+    - Invalid Token - khi cả Access Token và Refresh Token điều hết hạn thì sẽ đưa nó vào Invalid Token
+
+    Access Token 🎟️ → Dùng để truy cập API (có thể bị giới hạn thời gian).
+    Refresh Token 🔄 → Không dùng để truy cập API, chỉ dùng để xin Access Token mới khi cái cũ hết hạn.
+
+        📌 Cách hoạt động của Refresh Token
+    1️⃣ Người dùng đăng nhập → Hệ thống cấp cả Access Token + Refresh Token.
+    2️⃣ Access Token hết hạn → Gửi Refresh Token lên để xin Access Token mới.
+    3️⃣ Server kiểm tra Refresh Token hợp lệ → Cấp Access Token mới.
+    4️⃣ (Tuỳ hệ thống) Server có thể cấp luôn Refresh Token mới để tăng bảo mật.
+    5️⃣ Nếu Refresh Token hết hạn hoặc bị thu hồi → Người dùng phải đăng nhập lại.
+
+
+    Mỗi lần cấp lại Access Token thì có cần làm mới Refresh Token không?
+
+    ✅ Câu trả lời: Tuỳ vào cách triển khai! Có 2 cách phổ biến:
+
+    🔹 Cách 1: Không làm mới Refresh Token (Stateless - Cách đơn giản)
+    Khi Access Token hết hạn, client gửi Refresh Token lên để lấy Access Token mới.
+    Refresh Token vẫn giữ nguyên và tiếp tục sử dụng cho lần sau.
+    Chỉ khi Refresh Token hết hạn, người dùng bắt buộc phải đăng nhập lại.
+    💡 Ưu điểm:
+    ✔️ Dễ triển khai, không cần lưu trữ Refresh Token trên server.
+    ✔️ Phù hợp với hệ thống Stateless (REST API).
+    ❌ Nhược điểm:
+    Nếu hacker đánh cắp Refresh Token, hắn có thể lấy Access Token mới mãi mãi cho đến khi Refresh Token hết hạn.
+
+    🔹 Cách 2: Làm mới Refresh Token mỗi lần cấp lại Access Token (Cách bảo mật hơn)
+    Khi Access Token hết hạn, client gửi Refresh Token lên để lấy Access Token mới.
+    Server sẽ cấp cả Access Token mới & Refresh Token mới.
+    Refresh Token cũ bị vô hiệu hóa để tránh bị lạm dụng.
+    💡 Ưu điểm:
+    ✔️ Bảo mật cao hơn, vì nếu hacker lấy được Refresh Token, hắn chỉ có thể dùng 1 lần.
+    ✔️ Giảm nguy cơ token reuse (kẻ tấn công dùng lại token cũ).
+
+    ❌ Nhược điểm:
+    Phức tạp hơn, vì server phải lưu danh sách Refresh Token hợp lệ.
+
+    🔹 Cách nào tốt hơn?
+    Hệ thống không lưu trạng thái (Stateless API) → Cách 1 (không làm mới Refresh Token).
+    Hệ thống có lưu phiên đăng nhập (Stateful API) → Cách 2 (làm mới Refresh Token).
+
+    👉 Cách tốt nhất:
+    Nếu dùng Cách 1, hãy áp dụng cơ chế phát hiện Refresh Token bị đánh cắp, ví dụ:
+    Lưu Refresh Token hash trên server để kiểm tra.
+    Chỉ chấp nhận Refresh Token từ IP & thiết bị giống lúc tạo.
+    Nếu dùng Cách 2, server cần lưu danh sách Refresh Token đã cấp.
+
+    💡 Tóm lại:
+    Cách Có làm mới Refresh Token?	Khi nào dùng?
+    Cách 1 ❌ Không làm mới	Hệ thống Stateless, đơn giản, ít lưu trữ
+    Cách 2 ✅ Làm mới Bảo mật cao hơn, hệ thống có lưu phiên đăng nhập
+    Bạn đang triển khai theo hướng nào? 🚀
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
